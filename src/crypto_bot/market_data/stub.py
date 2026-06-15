@@ -15,6 +15,9 @@ class StubMarketDataProvider(MarketDataProvider):
         self._base = base_price
         self._step = step_seconds
 
+    def bar_period_seconds(self) -> float:
+        return float(self._step)
+
     async def stream_bars(self, symbol: Symbol) -> AsyncIterator[Bar]:
         t = datetime.now(timezone.utc).replace(second=0, microsecond=0)
         price = self._base
@@ -71,3 +74,7 @@ class StubMarketDataProvider(MarketDataProvider):
             )
             t += timedelta(seconds=self._step)
         return out
+
+    async def close(self) -> None:
+        """No-op for stub (matches CCXT provider cleanup interface)."""
+        return None

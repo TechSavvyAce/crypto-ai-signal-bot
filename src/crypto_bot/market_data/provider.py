@@ -10,6 +10,10 @@ from crypto_bot.market_data.types import Bar, Symbol
 class MarketDataProvider(ABC):
     """Exchange or replay source of normalized bars."""
 
+    def bar_period_seconds(self) -> float:
+        """Seconds between consecutive bar opens for this feed (used for min history windows)."""
+        return 60.0
+
     @abstractmethod
     async def stream_bars(self, symbol: Symbol) -> AsyncIterator[Bar]:
         """Yield new bars as they close (provider defines timeframe)."""

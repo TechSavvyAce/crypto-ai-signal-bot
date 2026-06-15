@@ -15,40 +15,43 @@ Phases build in pipeline order: each phase produces something runnable or testab
 
 - [x] Provider interface + CCXT historical + stream (polling)
 - [x] Normalization: symbol mapping (`resolve_market_symbol`), UTC helpers, bar alignment (`floor` / `align_range`)
-- [ ] Persistence optional: SQLite/Parquet for backfill and replay
-- [ ] Health: reconnect, rate limits, backoff (partial: rate limit via CCXT; stream has backoff on errors)
+- [x] Persistence optional (partial): Parquet + SQLite OHLCV (`load_bars_parquet`, `save_bars_parquet`, `load_bars_sqlite`, `append_bars_sqlite`) + `crypto-backtest --bars-parquet` / `--bars-sqlite`; [ ] larger catalog / streaming ingest
+- [ ] Health: reconnect, rate limits, backoff (partial: rate limit via CCXT; stream exponential backoff on errors; **historical** page retries + backoff)
 
 ## Phase 2 — Feature engine
 
-- [ ] Feature store contract: `bars_in → matrix/vector out`
-- [ ] Baseline features: returns, rolling vol, RSI or simple momentum proxies
-- [ ] Version features with a schema (column names + dtypes) for reproducibility
+- [x] Feature store contract: `compute_feature_table(bars) -> FeatureTable` (ordered columns + schema version)
+- [x] Baseline features: `ret_1`, `log_ret_1`, rolling vol of log returns, momentum, Wilder RSI
+- [x] Version features with a schema (`FEATURE_SCHEMA_VERSION` + window-specific column names from `FeatureConfig`)
 
 ## Phase 3 — AI model
 
-- [ ] Labeling / targets for trend, vol regime, momentum (define precisely)
-- [ ] Train/eval pipeline (walk-forward or time-split; no shuffle leakage)
-- [ ] Inference service: load model, batch or stream predictions
-- [ ] Model registry: path + hash + training config snapshot
+- [x] Labeling / targets: forward return, discrete trend class (`-1/0/1`), forward 1-bar log-vol window (`LabelConfig`, `compute_label_table`, schema `LABEL_SCHEMA_VERSION`)
+- [x] Train/eval baseline: chronological split (`time_series_split`) + multinomial logistic trend (`train_trend_logreg`, `crypto-train-baseline` CLI on synthetic demo OHLCV)
+- [x] Inference artifact: `save_trend_artifact` / `load_trend_artifact`, `TrendClassifierArtifact.predict_row` (CLI `--save-dir`)
+- [x] Model registry (partial): JSON index `crypto-model-registry` + SHA-256 fingerprint on resolve; daemons `--registry-name`; [ ] batch/stream packaging beyond daemons
 
 ## Phase 4 — Risk engine
 
-- [ ] Position sizing from vol / equity / max leverage
-- [ ] Stop logic (hard stop, ATR-style, or time stop)
-- [ ] Daily max loss + kill switch + “reduce only” mode
-- [ ] Pre-trade checks: min notional, max exposure per symbol
+- [x] Position cap: `max_position_frac_equity` × equity, bounded by `max_leverage` × equity
+- [x] Stop hint: symmetric `stop_loss_frac` from entry (long/short)
+- [x] Daily max loss kill-switch + UTC session roll (`RiskSessionState`, `RiskEngine`)
+- [x] Pre-trade: `min_order_notional_quote`; `reduce_only` bypasses kill for unwind-style intents
 
 ## Phase 5 — Execution engine
 
-- [ ] Order types you need (market/limit), idempotency keys
-- [ ] Paper trading mode vs live keys
-- [ ] Fill/slippage logging; reconciliation with exchange positions
+- [x] Order types: market + limit (v1 limit: instant marketability check at `mark_price`)
+- [x] Paper trading: `PaperExecutionEngine` with fill ledger
+- [x] Idempotency: stable `client_order_id` → same `OrderResult`, single fill
+- [x] Sync CCXT wrapper: `CcxtExecutionEngine` (`dry_run=True` → paper; `dry_run=False` → market orders); guarded **`crypto-ccxt-daemon --execution ccxt-live`** (`CRYPTO_BOT_LIVE_TRADING_ACK` + API keys)
+- [x] Spot balance clip: `fetch_spot_balance_free` + `RiskEngine.evaluate(..., spot_balance=…)`; daemon `--balance-cap`
+- [ ] Live soak + fill/slippage realism; full reconciliation (positions, fees, transfers)
 
 ## Phase 6 — Operations
 
-- [ ] Single entrypoint (CLI or daemon): modes `paper` | `live` | `backtest`
+- [ ] Single entrypoint (CLI or daemon): modes `paper` | `live` | `backtest` (partial: **`crypto-bot`** umbrella; **`crypto-ccxt-daemon --execution ccxt-live`** for guarded real spot orders; backtest + CSV/Parquet/SQLite + **`--mark-to-market`**; [ ] unified `live` product polish)
 - [ ] Metrics / alerts (optional: Telegram, email)
-- [ ] Secrets only via env; never commit keys
+- [x] Secrets only via env (partial: `.env.example` + README; never commit `.env` or keys)
 
 ---
 

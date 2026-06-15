@@ -10,9 +10,15 @@ class Settings(BaseSettings):
     default_symbol: str = "BTC/USDT"
     paper_trading: bool = True
 
+    # Model registry JSON (artifact name@version → path + fingerprint)
+    model_registry_file: str = ""
+
     # CCXT (public OHLCV works without keys; keys optional for private later)
     ccxt_exchange: str = "binance"
     ccxt_timeframe: str = "1m"
     ccxt_poll_interval: float = 2.0
     ccxt_api_key: str = ""
     ccxt_api_secret: str = ""
+
+    # Live spot orders (crypto-ccxt-daemon --execution ccxt-live): explicit opt-in + API keys
+    live_trading_ack: bool = False

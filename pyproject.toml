@@ -15,13 +15,26 @@ dependencies = [
 ]
 
 [project.scripts]
+crypto-bot = "crypto_bot.cli.entrypoint:main"
 crypto-fetch-bars = "crypto_bot.cli.fetch_bars:main"
+crypto-train-baseline = "crypto_bot.cli.train_baseline:main"
+crypto-paper-step = "crypto_bot.cli.paper_step:main"
+crypto-stub-daemon = "crypto_bot.cli.stub_daemon:main"
+crypto-ccxt-daemon = "crypto_bot.cli.ccxt_daemon:main"
+crypto-model-registry = "crypto_bot.cli.model_registry:main"
+crypto-backtest = "crypto_bot.cli.backtest:main"
 
 [project.optional-dependencies]
 dev = [
   "pytest>=8.0",
   "pytest-asyncio>=0.23",
   "ruff==0.9.10",
+]
+model = [
+  "scikit-learn>=1.3.0",
+]
+parquet = [
+  "pyarrow>=14.0",
 ]
 
 [tool.setuptools.packages.find]

@@ -14,6 +14,9 @@ from crypto_bot.market_data.types import Bar, Symbol
 
 logger = logging.getLogger(__name__)
 
+_HIST_FETCH_MAX_ATTEMPTS = 6
+_STREAM_BACKOFF_CAP_SEC = 60.0
+
 
 def _ohlcv_row_to_bar(symbol: Symbol, row: list[float]) -> Bar:
     ts_ms = int(row[0])
@@ -29,7 +32,12 @@ def _ohlcv_row_to_bar(symbol: Symbol, row: list[float]) -> Bar:
 
 
 class CcxtMarketDataProvider(MarketDataProvider):
-    """OHLCV via CCXT async REST (historical + polling stream of closed bars)."""
+    """OHLCV via CCXT async REST (historical + polling stream of closed bars).
+
+    **Resilience:** ``fetch_historical`` retries each OHLCV page on transient errors
+    (exponential sleep, capped). ``stream_bars`` uses exponential backoff on poll
+    failures (capped) and resets after a successful fetch.
+    """
 
     def __init__(
         self,
@@ -46,6 +54,10 @@ class CcxtMarketDataProvider(MarketDataProvider):
     def exchange(self) -> Any:
         """Underlying CCXT async exchange instance (markets loaded)."""
         return self._exchange
+
+    def bar_period_seconds(self) -> float:
+        """CCXT timeframe length in seconds (e.g. ``1m`` → 60)."""
+        return float(self._exchange.parse_timeframe(self._timeframe))
 
     @classmethod
     async def create(
@@ -65,7 +77,14 @@ class CcxtMarketDataProvider(MarketDataProvider):
         if exchange_options:
             opts.update(exchange_options)
         exchange = exchange_class(opts)
-        await exchange.load_markets()
+        try:
+            await exchange.load_markets()
+        except BaseException:
+            try:
+                await exchange.close()
+            except Exception as exc:  # noqa: BLE001 — best-effort cleanup
+                logger.warning("exchange.close() failed after load_markets error: %s", exc)
+            raise
         return cls(exchange, timeframe, poll_interval=poll_interval)
 
     def _timeframe_ms(self) -> int:
@@ -95,12 +114,34 @@ class CcxtMarketDataProvider(MarketDataProvider):
         limit = 1000
 
         while since < end_ms:
-            batch: list[list[float]] = await self._exchange.fetch_ohlcv(
-                str(symbol),
-                self._timeframe,
-                since,
-                limit,
-            )
+            batch: list[list[float]] | None = None
+            for attempt in range(_HIST_FETCH_MAX_ATTEMPTS):
+                try:
+                    batch = await self._exchange.fetch_ohlcv(
+                        str(symbol),
+                        self._timeframe,
+                        since,
+                        limit,
+                    )
+                    break
+                except Exception:
+                    if attempt >= _HIST_FETCH_MAX_ATTEMPTS - 1:
+                        logger.exception(
+                            "fetch_ohlcv failed in fetch_historical after %s attempts (since=%s)",
+                            _HIST_FETCH_MAX_ATTEMPTS,
+                            since,
+                        )
+                        raise
+                    delay = min(30.0, 2.0**attempt)
+                    logger.warning(
+                        "fetch_ohlcv historical retry %s/%s in %.1fs (since=%s)",
+                        attempt + 1,
+                        _HIST_FETCH_MAX_ATTEMPTS,
+                        delay,
+                        since,
+                    )
+                    await asyncio.sleep(delay)
+            assert batch is not None
             if not batch:
                 break
             hit_end = False
@@ -122,6 +163,7 @@ class CcxtMarketDataProvider(MarketDataProvider):
     async def stream_bars(self, symbol: Symbol) -> AsyncIterator[Bar]:
         tf_ms = self._timeframe_ms()
         last_emitted_open_ms: int | None = None
+        consecutive_failures = 0
 
         while True:
             try:
@@ -131,9 +173,19 @@ class CcxtMarketDataProvider(MarketDataProvider):
                     limit=5,
                 )
             except Exception:
-                logger.exception("fetch_ohlcv failed during stream; backing off")
-                await asyncio.sleep(max(self._poll_interval, 5.0))
+                consecutive_failures += 1
+                logger.exception(
+                    "fetch_ohlcv failed during stream (try %s); backing off",
+                    consecutive_failures,
+                )
+                delay = min(
+                    _STREAM_BACKOFF_CAP_SEC,
+                    max(self._poll_interval, 2.0 ** min(consecutive_failures, 6)),
+                )
+                await asyncio.sleep(delay)
                 continue
+
+            consecutive_failures = 0
 
             now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
 
